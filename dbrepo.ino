@@ -1,129 +1,87 @@
 #include <Servo.h>
 
-Servo dryServo;  
-Servo wetServo;  
+Servo dryServo;
+Servo wetServo;
 
-const int moistureSensorPin = A0; 
-const int dryServoPin = 9;         
-const int wetServoPin = 10;        
-const int pirSensorPin = 2;        
+const int moistureSensorPin = A0;
+const int dryServoPin = 9;
+const int wetServoPin = 10;
+const int pirSensorPin = 2;
 
-unsigned long lastDryActionTime = 0;  
-unsigned long lastWetActionTime = 0;  
-unsigned long lastSensorReadTime = 0; 
+int dryCal = 300;   // Sensor value when dry (lower value in simulation)
+int wetCal = 700;   // Sensor value when wet (higher value in simulation)
 
-const unsigned long moveDuration = 5000;
-const unsigned long debounceTime = 500;  
-
-bool isDryServoMoving = false;
-bool isWetServoMoving = false;
-bool isMotionDetected = false;
-
-int dryCal = 0;
-int wetCal = 1023;
-
-void waitForUser(const char* message) {
-  Serial.println(message);
-  while (!Serial.available()) {
-    delay(100);
-  }
-  while (Serial.available()) Serial.read(); // Clear buffer
-}
-
-void calibrateMoistureSensor() {
-  waitForUser("Place sensor in DRY AIR and press any key...");
-  dryCal = analogRead(moistureSensorPin);
-  Serial.print("Dry calibrated value: ");
-  Serial.println(dryCal);
-
-  waitForUser("Now place sensor in WATER and press any key...");
-  wetCal = analogRead(moistureSensorPin);
-  Serial.print("Wet calibrated value: ");
-  Serial.println(wetCal);
-
-  if (wetCal <= dryCal) {
-    Serial.println("Error: Wet value should be higher than dry value. Using default calibration.");
-    dryCal = 0;
-    wetCal = 1023;
-  } else {
-    Serial.println("Calibration complete.");
-  }
-}
-
-int getMoisturePercent(int value) {
-  return constrain(map(value, dryCal, wetCal, 0, 100), 0, 100);
-}
+bool isDryServoOn = false;
+bool isWetServoOn = false;
+bool pirAvailable = true;
 
 void setup() {
-  Serial.begin(9600); 
-  Serial.println("System Booting...");
-
+  Serial.begin(9600);
   dryServo.attach(dryServoPin);
   wetServo.attach(wetServoPin);
   dryServo.write(0);
   wetServo.write(0);
+
   pinMode(pirSensorPin, INPUT);
 
-  calibrateMoistureSensor();
+  Serial.println("System Ready.");
+}
 
-  Serial.println("System ready.");
+int readMoisturePercent() {
+  int sensorValue = analogRead(moistureSensorPin);
+  sensorValue = constrain(sensorValue, dryCal, wetCal);
+  int percent = map(sensorValue, dryCal, wetCal, 0, 100);  // Correct order
+  return constrain(percent, 0, 100);
 }
 
 void loop() {
-  unsigned long currentTime = millis();  
-  int pirValue = digitalRead(pirSensorPin);
-  isMotionDetected = (pirValue == HIGH);
+  bool motion = digitalRead(pirSensorPin) == HIGH || !pirAvailable;
+  int moisturePercent = readMoisturePercent();
 
-  Serial.print("PIR: ");
-  Serial.print(pirValue);
+  Serial.print("Moisture: ");
+  Serial.print(moisturePercent);
+  Serial.print("% | Status: ");
+  if (moisturePercent < 50) {
+    Serial.print("DRY");
+  } else {
+    Serial.print("WET");
+  }
+  Serial.print(" | PIR: ");
+  Serial.println(motion ? "Motion Detected" : "No Motion");
 
-  int rawMoisture = analogRead(moistureSensorPin);
-  int percentMoisture = getMoisturePercent(rawMoisture);
+  if (motion) {
+    if (moisturePercent < 50 && !isDryServoOn) {
+      dryServo.write(60);
+      isDryServoOn = true;
+      Serial.println("Dry Servo ON");
+    } else if (moisturePercent >= 50 && isDryServoOn) {
+      dryServo.write(0);
+      isDryServoOn = false;
+      Serial.println("Dry Servo OFF");
+    }
 
-  Serial.print(" | Raw Moisture: ");
-  Serial.print(rawMoisture);
-  Serial.print(" | % Moisture: ");
-  Serial.println(percentMoisture);
-
-  if (isMotionDetected) {
-    if ((currentTime - lastSensorReadTime) > debounceTime) {
-      if (percentMoisture < 50 && !isDryServoMoving) {
-        dryServo.write(60);
-        lastDryActionTime = currentTime;
-        isDryServoMoving = true;
-        Serial.println("Dry detected - Dry Servo ON");
-      } else if (isDryServoMoving && (currentTime - lastDryActionTime >= moveDuration)) {
-        dryServo.write(0);
-        isDryServoMoving = false;
-        Serial.println("Dry Servo OFF");
-      }
-
-      if (percentMoisture >= 50 && !isWetServoMoving) {
-        wetServo.write(60);
-        lastWetActionTime = currentTime;
-        isWetServoMoving = true;
-        Serial.println("Wet detected - Wet Servo ON");
-      } else if (isWetServoMoving && (currentTime - lastWetActionTime) >= moveDuration) {
-        wetServo.write(0);
-        isWetServoMoving = false;
-        Serial.println("Wet Servo OFF");
-      }
-
-      lastSensorReadTime = currentTime;
+    if (moisturePercent >= 50 && !isWetServoOn) {
+      wetServo.write(60);
+      isWetServoOn = true;
+      Serial.println("Wet Servo ON");
+    } else if (moisturePercent < 50 && isWetServoOn) {
+      wetServo.write(0);
+      isWetServoOn = false;
+      Serial.println("Wet Servo OFF");
     }
   } else {
-    if (isDryServoMoving) {
+    // No motion: turn off both
+    if (isDryServoOn) {
       dryServo.write(0);
-      isDryServoMoving = false;
-      Serial.println("No motion - Dry Servo OFF");
+      isDryServoOn = false;
+      Serial.println("Dry Servo OFF - No Motion");
     }
-    if (isWetServoMoving) {
+    if (isWetServoOn) {
       wetServo.write(0);
-      isWetServoMoving = false;
-      Serial.println("No motion - Wet Servo OFF");
+      isWetServoOn = false;
+      Serial.println("Wet Servo OFF - No Motion");
     }
   }
 
-  delay(100);
+  delay(500);
 }
-
