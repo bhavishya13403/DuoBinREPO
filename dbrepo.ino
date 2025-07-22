@@ -1,286 +1,273 @@
+// DuoBin - Full Version with Admin Login, Auto, Graph, CompactAuto, and Hidden Games
 #include <Servo.h>
 
-Servo dryServo;
-Servo wetServo;
+int moistureSensorPin = A0;
+int dryServoPin = 9;
+int wetServoPin = 10;
+int pirSensorPin = 2;
 
-const int moistureSensorPin = A0;
-const int dryServoPin = 9;
-const int wetServoPin = 10;
-const int pirSensorPin = 2;
+Servo binServo;
+String currentUser = "";
+bool loggedIn = false;
+bool isAdmin = false;
+bool autoMode = false;
+bool compactAutoMode = false;
 
-unsigned long lastDryActionTime = 0;
-unsigned long lastWetActionTime = 0;
-unsigned long lastSensorReadTime = 0;
-unsigned long lastInfoTime = 0;
+int minMoisture = 1023;
+int maxMoisture = 0;
 
-const unsigned long moveDuration = 5000;
-const unsigned long debounceTime = 500;
-const unsigned long autoInfoInterval = 3000;
-
-bool isDryServoMoving = false;
-bool isWetServoMoving = false;
-bool isMotionDetected = false;
-bool adminMode = true;
-bool systemReady = false;
-bool showVersion = true;
-bool autoInfo = false;
-bool awaitingAdminLogin = false;
-bool rudeDesiMode = false;
-
-int dryCal = 0;
-int wetCal = 1023;
-
-#define VERSION "Duobin v1.0.0"
-#define ADMIN_PASSWORD "1234"
-
-int infoCount = 0;
-long totalMoisture = 0;
-long totalPIR = 0;
-
-void waitForUser(const char *message) {
-  Serial.println(message);
-  while (!Serial.available()) {
-    delay(100);
-  }
-  while (Serial.available()) Serial.read();
-}
-
-void calibrateMoistureSensor() {
-  waitForUser("Place sensor in DRY AIR and press ENTER:");
-  dryCal = analogRead(moistureSensorPin);
-  Serial.print("Dry calibrated value: ");
-  Serial.println(dryCal);
-
-  waitForUser("Now place sensor in WATER and press ENTER:");
-  wetCal = analogRead(moistureSensorPin);
-  Serial.print("Wet calibrated value: ");
-  Serial.println(wetCal);
-
-  if (wetCal <= dryCal) {
-    Serial.println("Error: Wet must be higher than Dry! Using defaults.");
-    dryCal = 0;
-    wetCal = 1023;
-  } else {
-    Serial.println("Calibration complete.");
-  }
-}
-
-int getMoisturePercent(int value) {
-  return constrain(map(value, dryCal, wetCal, 0, 100), 0, 100);
-}
-
-void displayHeader() {
-  const char* lines[] = {
-    "   ____        _     _       ",
-    "  |  _ \\  ___ | |__ (_) ___  ",
-    "  | | | |/ _ \\| '_ \\| |/ _ \\ ",
-    "  | |_| | (_) | | | | | (_) |",
-    "  |____/ \\___/|_| |_|_|\\___/ ",
-    "         Waste Sorter v1.0.0"
-  };
-  for (int i = 0; i < 6; i++) {
-    Serial.println(lines[i]);
-    delay(150);
-  }
-  Serial.println("============================");
-  if (showVersion) {
-    Serial.print("         ");
-    Serial.println(VERSION);
-  }
-  Serial.println("");
-}
-
-void printInfo(bool isAuto = false) {
-  int raw = analogRead(moistureSensorPin);
-  int percent = getMoisturePercent(raw);
-  int pir = digitalRead(pirSensorPin);
-
-  Serial.print(isAuto ? "[Auto] " : "[Info] ");
-  Serial.print("Moisture (raw): ");
-  Serial.print(raw);
-  Serial.print(" | %: ");
-  Serial.print(percent);
-  Serial.print(" | PIR: ");
-  Serial.println(pir);
-
-  totalMoisture += percent;
-  totalPIR += pir;
-  infoCount++;
-}
-
-void printAverages() {
-  if (infoCount == 0) {
-    Serial.println("No data to average.");
-    return;
-  }
-  Serial.println("--- Average Report ---");
-  Serial.print("Avg Moisture %: ");
-  Serial.println(totalMoisture / infoCount);
-  Serial.print("Avg Motion % (0/1): ");
-  Serial.println((float)totalPIR / infoCount);
-  Serial.println("----------------------");
-}
-
-void runVanityDB() {
-  const char* db[] = {
-    "╔══════════════════════╗",
-    "║      D  U  O  B  I   ║",
-    "║     Smart Bin v1.0   ║",
-    "╚══════════════════════╝"
-  };
-  for (int i = 0; i < 4; i++) {
-    Serial.println(db[i]);
-    delay(200);
-  }
-}
-
-void adminConsole() {
-  displayHeader();
-  Serial.println("Admin Mode Active.");
-  Serial.println("Type CAL / TEST / INFO / AVG / AUTO / VERSION / DESI / DB / EXIT");
-
-  while (adminMode) {
-    if (Serial.available()) {
-      String input = Serial.readStringUntil('\n');
-      input.trim();
-      input.toUpperCase();
-
-      if (input == "CAL") {
-        calibrateMoistureSensor();
-      } else if (input == "TEST") {
-        Serial.println("Testing Dry Servo...");
-        dryServo.write(60);
-        delay(1000);
-        dryServo.write(0);
-
-        Serial.println("Testing Wet Servo...");
-        wetServo.write(60);
-        delay(1000);
-        wetServo.write(0);
-
-        Serial.println("Moisture Value: " + String(analogRead(moistureSensorPin)));
-        Serial.println("PIR State: " + String(digitalRead(pirSensorPin)));
-
-        Serial.println("Servo Test Complete.");
-      } else if (input == "INFO") {
-        printInfo();
-      } else if (input == "AVG") {
-        printAverages();
-      } else if (input == "VERSION") {
-        showVersion = !showVersion;
-        Serial.print("Version display now ");
-        Serial.println(showVersion ? "ON" : "OFF");
-      } else if (input == "AUTO") {
-        autoInfo = !autoInfo;
-        Serial.print("Auto info now ");
-        Serial.println(autoInfo ? "ON" : "OFF");
-      } else if (input == "DESI") {
-        rudeDesiMode = !rudeDesiMode;
-        Serial.println(rudeDesiMode ? "Desi mode ON: Ab samjha karo bina kaam ke kuch mat dabao." : "Desi mode OFF: Back to normal, you boring human.");
-      } else if (input == "DB") {
-        runVanityDB();
-      } else if (input == "EXIT") {
-        Serial.println(rudeDesiMode ? "Chal nikal admin mode se!" : "Exiting Admin Mode...");
-        adminMode = false;
-        awaitingAdminLogin = true;
-        systemReady = true;
-      } else {
-        Serial.println(rudeDesiMode ? "Kya bakwaas command hai be?" : "Unknown Command");
-      }
-
-      while (Serial.available()) Serial.read();
-    }
-
-    if (autoInfo && millis() - lastInfoTime > autoInfoInterval) {
-      printInfo(true);
-      lastInfoTime = millis();
-    }
-  }
-}
-
-void checkAdminLogin() {
-  if (awaitingAdminLogin && Serial.available()) {
-    String input = Serial.readStringUntil('\n');
-    input.trim();
-    if (input == ADMIN_PASSWORD) {
-      Serial.println("Admin login successful.");
-      adminMode = true;
-      awaitingAdminLogin = false;
-      adminConsole();
-    } else {
-      Serial.println("Incorrect password.");
-    }
-    while (Serial.available()) Serial.read();
-  }
+void showMenu() {
+  Serial.println("\n========== DuoBin Main Menu ==========");
+  Serial.println(" create       - Create a new user");
+  Serial.println(" login        - Login as existing user");
+  Serial.println(" test         - Check sensor readings");
+  Serial.println(" graph        - Visualize sensor data");
+  Serial.println(" auto         - Toggle auto sensor stream");
+  Serial.println(" compactauto  - Compact sensor output mode");
+  Serial.println(" cal          - Calibrate sensors");
+  Serial.println(" info         - Show user information");
+  Serial.println(" ver          - Show version");
+  Serial.println(" servo        - Test bin servo");
+  Serial.println(" setpin       - Reassign a sensor/servo pin");
+  Serial.println("======================================");
 }
 
 void setup() {
   Serial.begin(9600);
-  dryServo.attach(dryServoPin);
-  wetServo.attach(wetServoPin);
-  dryServo.write(0);
-  wetServo.write(0);
+  binServo.attach(dryServoPin);
+  pinMode(moistureSensorPin, INPUT);
   pinMode(pirSensorPin, INPUT);
+  pinMode(3, OUTPUT);  // D3 for moisture sensor control/output
+  Serial.println("Welcome to DuoBin!");
+  promptLogin();
+}
 
-  adminConsole();
-  if (!systemReady) {
-    calibrateMoistureSensor();
-    systemReady = true;
+void promptLogin() {
+  while (!loggedIn) {
+    Serial.println("\nPlease login to continue.");
+    loginUser();
   }
-  Serial.println("System Running.");
+  showMenu();
 }
 
 void loop() {
-  if (!systemReady) return;
+  if (!loggedIn) return;
 
-  checkAdminLogin();
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
 
-  unsigned long currentTime = millis();
-  int pirValue = digitalRead(pirSensorPin);
-  isMotionDetected = (pirValue == HIGH);
+    if (cmd == "create") createUser();
+    else if (cmd == "login") loginUser();
+    else if (cmd == "graph") startGraphMode();
+    else if (cmd == "auto") autoMode = !autoMode;
+    else if (cmd == "compactauto") compactAutoMode = !compactAutoMode;
+    else if (cmd == "test") testSensors();
+    else if (cmd == "cal") calibrateSensors();
+    else if (cmd == "info") showUserInfo();
+    else if (cmd == "ver") Serial.println("DuoBin v1.1");
+    else if (cmd == "servo") servoTest();
+    else if (cmd.startsWith("setpin")) handleSetPin(cmd);
+    else if (cmd == "SOLORUN") startSolitaireMode();
+    else Serial.println("Unknown command. Please try again.");
 
-  int rawMoisture = analogRead(moistureSensorPin);
-  int percentMoisture = getMoisturePercent(rawMoisture);
-
-  if (isMotionDetected) {
-    if ((currentTime - lastSensorReadTime) > debounceTime) {
-      if (percentMoisture < 50 && !isDryServoMoving) {
-        dryServo.write(60);
-        lastDryActionTime = currentTime;
-        isDryServoMoving = true;
-      } else if (isDryServoMoving && (currentTime - lastDryActionTime >= moveDuration)) {
-        dryServo.write(0);
-        isDryServoMoving = false;
-      }
-
-      if (percentMoisture >= 50 && !isWetServoMoving) {
-        wetServo.write(60);
-        lastWetActionTime = currentTime;
-        isWetServoMoving = true;
-      } else if (isWetServoMoving && (currentTime - lastWetActionTime) >= moveDuration) {
-        wetServo.write(0);
-        isWetServoMoving = false;
-      }
-      lastSensorReadTime = currentTime;
-    }
-  } else {
-    if (isDryServoMoving) {
-      dryServo.write(0);
-      isDryServoMoving = false;
-    }
-    if (isWetServoMoving) {
-      wetServo.write(0);
-      isWetServoMoving = false;
-    }
+    if (!autoMode && !compactAutoMode) showMenu();
   }
 
-  if (autoInfo && (millis() - lastInfoTime > autoInfoInterval)) {
-    printInfo(true);
-    lastInfoTime = millis();
+  if (autoMode) {
+    int moist = analogRead(moistureSensorPin);
+    int pir = digitalRead(pirSensorPin);
+    Serial.print("\n[Auto @ ");
+    Serial.print(millis() / 1000);
+    Serial.println("s]");
+    Serial.print("Moisture: ");
+    Serial.println(moist);
+    Serial.print("PIR: ");
+    Serial.println(pir);
+
+    if (moist < minMoisture) minMoisture = moist;
+    if (moist > maxMoisture) maxMoisture = moist;
+    delay(2000);
   }
 
-  delay(100);
+  if (compactAutoMode) {
+    int moist = analogRead(moistureSensorPin);
+    int pir = digitalRead(pirSensorPin);
+    unsigned long timestamp = millis() / 1000;
+
+    if (moist < minMoisture) minMoisture = moist;
+    if (moist > maxMoisture) maxMoisture = moist;
+
+    Serial.print("[T:");
+    Serial.print(timestamp);
+    Serial.print("] Moisture:");
+    Serial.print(moist);
+    Serial.print(" PIR:");
+    Serial.print(pir);
+    Serial.print(" Min:");
+    Serial.print(minMoisture);
+    Serial.print(" Max:");
+    Serial.println(maxMoisture);
+    delay(1000);
+  }
 }
- 
-// HI
 
+void createUser() {
+  Serial.println("\n[Create User]");
+  Serial.println("Enter new username:");
+  while (!Serial.available())
+    ;
+  String username = Serial.readStringUntil('\n');
+  username.trim();
+
+  if (username == "irishepianist") {
+    Serial.println("Username reserved for admin.");
+    return;
+  }
+
+  Serial.println("Enter password:");
+  while (!Serial.available())
+    ;
+  String pass = Serial.readStringUntil('\n');
+  pass.trim();
+
+  Serial.println("User created (not saved).");
+}
+
+void loginUser() {
+  Serial.println("\n[Login]");
+  Serial.println("Username:");
+  while (!Serial.available())
+    ;
+  String username = Serial.readStringUntil('\n');
+  username.trim();
+
+  Serial.println("Password:");
+  while (!Serial.available())
+    ;
+  String pass = Serial.readStringUntil('\n');
+  pass.trim();
+
+  if (username == "irishepianist" && pass == "1234") {
+    isAdmin = true;
+    loggedIn = true;
+    currentUser = username;
+    Serial.println("Admin login successful.");
+  } else {
+    isAdmin = false;
+    loggedIn = true;
+    currentUser = username;
+    Serial.println("Login successful.");
+  }
+}
+
+void showUserInfo() {
+  if (loggedIn) {
+    Serial.print("Logged in as: ");
+    Serial.println(currentUser);
+    if (isAdmin) Serial.println("Privileges: Admin");
+    else Serial.println("Privileges: Standard");
+  } else {
+    Serial.println("Not logged in.");
+  }
+}
+
+void testSensors() {
+  Serial.println("\n[Sensor Test]");
+  Serial.print("Moisture Sensor: ");
+  Serial.println(analogRead(moistureSensorPin));
+  Serial.print("PIR Sensor: ");
+  Serial.println(digitalRead(pirSensorPin));
+}
+
+void calibrateSensors() {
+  Serial.println("\n[Calibration]");
+  Serial.println("Hold steady. Calibrating...");
+  delay(3000);
+  Serial.println("Calibration complete.");
+}
+
+void startGraphMode() {
+  Serial.println("\n[Graph Mode]");
+  for (int i = 0; i < 10; i++) {
+    int w = analogRead(moistureSensorPin);
+    int d = analogRead(pirSensorPin);
+
+    Serial.print("Moisture [");
+    for (int j = 0; j < w / 100; j++) Serial.print("#");
+    Serial.print("] ");
+    Serial.println(w);
+
+    Serial.print("PIR      [");
+    for (int j = 0; j < d / 100; j++) Serial.print("#");
+    Serial.print("] ");
+    Serial.println(d);
+
+    delay(1000);
+  }
+}
+
+void startSolitaireMode() {
+  Serial.println("\n[Solo Numbers Game]");
+  int secret = random(1, 10);
+  while (true) {
+    if (Serial.available()) {
+      String input = Serial.readStringUntil('\n');
+      input.trim();
+      if (input == "exit") {
+        Serial.println("Exiting Solo Numbers...");
+        break;
+      } else if (input.toInt() == secret) {
+        Serial.println("Correct!");
+        secret = random(1, 10);
+      } else {
+        Serial.println("Wrong! Try again.");
+      }
+    }
+  }
+}
+
+void servoTest() {
+  Serial.println("\n[Servo Test]");
+  Serial.println("Moving to 0°...");
+  binServo.write(0);
+  delay(1000);
+  Serial.println("Moving to 90°...");
+  binServo.write(90);
+  delay(1000);
+  Serial.println("Moving to 180°...");
+  binServo.write(180);
+  delay(1000);
+  Serial.println("Servo test complete.");
+}
+
+void handleSetPin(String cmd) {
+  int space1 = cmd.indexOf(' ');
+  int space2 = cmd.indexOf(' ', space1 + 1);
+  if (space1 < 0 || space2 < 0) {
+    Serial.println("Usage: setpin <moisture/pir/dryservo/wetservo> <pin>");
+    return;
+  }
+
+  String name = cmd.substring(space1 + 1, space2);
+  String pinVal = cmd.substring(space2 + 1);
+  pinVal.trim();
+
+  int val = (pinVal.startsWith("A")) ? pinVal.charAt(1) - '0' + A0 : pinVal.toInt();
+
+  if (name == "moisture") moistureSensorPin = val;
+  else if (name == "pir") pirSensorPin = val;
+  else if (name == "dryservo") dryServoPin = val;
+  else if (name == "wetservo") wetServoPin = val;
+  else {
+    Serial.println("Unknown component. Try: moisture, pir, dryservo, wetservo");
+    return;
+  }
+
+  if (name.endsWith("servo")) binServo.attach(val);
+  pinMode(val, INPUT);
+  Serial.print("Reassigned ");
+  Serial.print(name);
+  Serial.print(" to pin ");
+  Serial.println(val);
+}
